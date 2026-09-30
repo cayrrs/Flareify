@@ -169,6 +169,15 @@ async def save_panel_message(guild_id: int, channel_id: int, message_id: int):
         )
         await db.commit()
 
+async def get_panel_message(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT channel_id, message_id FROM guild_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        return await cur.fetchone()
+
 def build_verification_embed(min_age_days: int, min_level: int) -> discord.Embed:
     embed = discord.Embed(
         title="RecFlare Verification",
@@ -361,44 +370,63 @@ class Flareify(commands.Bot):
         
 
     async def setup_hook(self):
-        await self.tree.sync()
         await init_db()
+        self.add_view(VerifyView())
+        await self.tree.sync()
 
 bot = Flareify()
 
 
 @bot.tree.command(name="verify", description="Sends the Flareify verification message.")
-@app_commands.describe(age = "min account age", level = "min level")
+@app_commands.describe(age="min account age", level="min level")
 @app_commands.checks.has_permissions(administrator=True)
-async def verify(interaction: discord.Interaction, level:int, age:int,role: discord.Role,):
-    cfg = await get_guild_config(interaction.guild_id)
+async def verify(
+    interaction: discord.Interaction,
+    level: int,
+    age: int,
+    role: discord.Role,
+):
+    existing = await get_panel_message(interaction.guild_id)
+
+    if existing is not None:
+        try:
+            channel = bot.get_channel(existing["channel_id"])
+
+            if channel is not None:
+                message = await channel.fetch_message(existing["message_id"])
+
+                return await interaction.response.send_message(
+                    "there is already a verification message in this server.",
+                    ephemeral=True,
+                )
+
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+
+    await save_guild_config(
+        interaction.guild_id,
+        role.id,
+        age,
+        level,
+    )
 
     msg = await interaction.channel.send(
-        embed=build_verification_embed(
-            age,
-            level
-        ),
+        embed=build_verification_embed(age, level),
         view=VerifyView(),
     )
 
     await save_panel_message(
         interaction.guild_id,
         interaction.channel_id,
-        msg.id
-    )
-    await save_guild_config(
-        interaction.guild_id,
-        role.id,
-        age,
-        level
+        msg.id,
     )
 
     await interaction.response.send_message(
         "verification message sent.",
-        ephemeral=True
+        ephemeral=True,
     )
    
 
 
 
-bot.run(TOKEN)   
+bot.run(TOKEN)    
